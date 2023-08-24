@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.cuda.amp import autocast, GradScaler
 
 import math
 import sys
@@ -125,11 +126,8 @@ def train():
 
     utils.log_string(log, 'compiling model...')
     model = ST_MAN(1, args.P, args.Q, T, args.N, args.L, args.K, args.d, args.drop_rate, bn=True)
+    model = torch.compile(model)
     model.to(device)
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=args.learning_rate)
-    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.decay_rate)
-    criterion = MaskedL1Loss() if args.masked_l1 else nn.L1Loss() # whether use masked version of the `nn.L1Loss()`
 
     # display parameters
     parameters = 0
@@ -138,10 +136,18 @@ def train():
     utils.log_string(log, 'trainable parameters: {:,}'.format(parameters))
     utils.log_string(log, 'model compiled!')
 
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=args.learning_rate)
+    scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer, gamma=args.decay_rate)
+    criterion = MaskedL1Loss() if args.masked_l1 else nn.L1Loss() # whether use masked version of the `nn.L1Loss()`
+
+
     utils.log_string(log, '**** training model ****')
     # control variables
     wait = 0
     val_loss_min = np.inf
+
+    scaler = GradScaler()
 
     # epoch loop
     for epoch in range(args.max_epoch):
@@ -157,11 +163,15 @@ def train():
         for data in train_loader:
             bX, bY, bTE = data
             optimizer.zero_grad()
-            p_bY = model(bX, bTE, SE)
-            p_bY = p_bY * std + mean
-            loss = criterion(p_bY, bY)
-            loss.backward()
-            optimizer.step()
+            with autocast():
+                p_bY = model(bX, bTE, SE)
+                p_bY = p_bY * std + mean
+                loss = criterion(p_bY, bY)
+            # loss.backward()
+            # optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             train_loss += loss.item() * bX.shape[0]
         train_loss /= len(train_set)
         end_train = time.time()
@@ -225,6 +235,7 @@ def test():
     utils.log_string(log, '**** testing model ****')
     utils.log_string(log, 'loading model from %s' % args.model_file)
     model = ST_MAN(1, args.P, args.Q, T, args.N, args.L, args.K, args.d, args.drop_rate, bn=True)
+    model = torch.compile(model)
     model.load_state_dict(torch.load(args.model_file, device))
     model.to(device)
     utils.log_string(log, 'model restored!')
@@ -288,7 +299,6 @@ def test():
     utils.log_string(
         log, 'average:         %.2f\t\t%.2f\t\t%.2f%%' %
         (average_mae, average_rmse, average_mape * 100))
-
 
 
 if __name__ == "__main__":
