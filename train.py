@@ -1,5 +1,3 @@
-import torch_directml
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -78,7 +76,7 @@ parser.add_argument('--masked_l1', default = config['masked_l1'], type=bool,
                     help = 'whether use masked l1 loss')
 args = parser.parse_args()
 
-device = torch_directml.device() # torch.device(args.gpu_device if torch.cuda.is_available() else 'cpu')
+device = torch.device(args.gpu_device if torch.cuda.is_available() else 'cpu')
 log = open(args.log_file, 'w')
 utils.log_string(log, str(args)[10 : -1])
 
